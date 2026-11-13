@@ -35,7 +35,7 @@ cd sheeridVerify
 
 ```bash
 npm ci
-npm run browser:install
+npm run browser:check
 ```
 
 首次使用时复制配置，已有个人配置请直接编辑原文件。
@@ -66,7 +66,7 @@ npm run web
 npm test
 ```
 
-测试使用模拟接口及本地页面，不向真实验证接口提交数据。未安装 Camoufox 时会跳过浏览器相关用例；网页和浏览器改动应在安装浏览器后验证。GitHub Actions 在 Node.js 22、24 上运行不含已安装浏览器的测试。欢迎按 [贡献指南](CONTRIBUTING.md) 提交问题和改进，报告前请删除个人资料、凭据及真实验证链接。
+测试使用模拟接口及本地页面，不向真实验证接口提交数据。ego 浏览器逐轮执行，无法复用 Playwright 进程内夹具，因此少数依赖该机制的用例保持跳过。GitHub Actions 在 Node.js 22、24 上运行不依赖浏览器的测试。欢迎按 [贡献指南](CONTRIBUTING.md) 提交问题和改进，报告前请删除个人资料、凭据及真实验证链接。
 
 ## 协议与责任说明
 
@@ -80,7 +80,7 @@ npm test
 
 ## 工作原理
 
-当前命令行先用 Node.js 内置 `fetch` 查询状态，再选择执行流程：需要填写学生资料时使用 Camoufox，需要材料验证时使用纯 `fetch` 接口。材料上传保持文件原始内容，不生成或修改证明文件。
+当前命令行先用 Node.js 内置 `fetch` 查询状态，再选择执行流程：需要填写学生资料时通过 `ego-browser` 驱动真实浏览器，需要材料验证时使用纯 `fetch` 接口。材料上传保持文件原始内容，不生成或修改证明文件。
 
 ## 使用
 
@@ -142,7 +142,7 @@ Web 默认仅监听本机，不把完整配置返回前端，也不持久保存�
 
 ### instabox 部署
 
-程序目录为 `/data/workspace/one`，使用 Node.js 22+，运行 `npm ci` 和 `npm run browser:install` 安装依赖及对应平台的 Camoufox。Linux 有界面浏览器使用 `DISPLAY=:1`，可在 instabox 的 Computer 标签中查看和操作；个人配置仍使用 `config/sheerid.local.json`。
+程序目录为 `/data/workspace/one`，使用 Node.js 22+，运行 `npm ci` 和 `npm run browser:check` 安装依赖并确认 ego 浏览器可用。Linux 有界面浏览器使用 `DISPLAY=:1`，可在 instabox 的 Computer 标签中查看和操作；个人配置仍使用 `config/sheerid.local.json`。
 
 公网部署设置 `ONE_WEB_HOST=0.0.0.0`、`ONE_WEB_PUBLIC_ORIGIN=https://你的域名`，可用 `ONE_WEB_PASSWORD` 覆盖默认访问密码 `JenkinWoo`。不再使用 `ONE_WEB_USER` 或 HTTP Basic 登录；网页可直接打开，在表单的“访问密码”中输入密码即可。API 校验密码或会话 Cookie，并继续检查来源和写请求令牌。公网必须使用 HTTPS 入口；未配置监听环境变量时仍只监听本机。密码校验成功后设置 HttpOnly、SameSite=Strict 的会话 Cookie（公网额外设置 Secure），刷新页面无需重复输入；服务重启后需重新验证。
 
@@ -232,7 +232,7 @@ SOCKS5 使用 `"server": "socks5://proxy.example.com:1080"`，账号密码字段
 
 SheerID 选择学校后会将搜索输入框替换为只读学校文本框，原搜索框 ID 不再保留。学校分支优先识别这个已选控件，核对只读状态、完整学校/校区名称及校验状态；确认稳定后继续填写姓名等字段，不再等待已被移除的搜索框。仅输入了搜索文字仍不算选中。
 
-浏览器启动时排除 Camoufox 自带的 uBlock Origin，减少验证资源被扩展拦截的可能性。填写完成后统一等待提交按钮：按钮禁用、被遮挡或页面显示“正在确认您是真人”时等待；出现“无法确认您是真人”和可用的“重试”按钮时点击重试，同一次运行最多 3 次。每次重试先等待加载结果，不连续点击；若错误提示始终未变化，至少间隔 5 秒才再尝试。第 3 次后再次失败，返回 `failed` / `HUMAN_VERIFICATION_RETRY_EXHAUSTED`，不提交表单。错误提示消失本身不算成功，必须等提交按钮可点击且没有验证加载/错误提示。
+浏览器由 ego 启动，页面资源不受扩展拦截影响。填写完成后统一等待提交按钮：按钮禁用、被遮挡或页面显示“正在确认您是真人”时等待；出现“无法确认您是真人”和可用的“重试”按钮时点击重试，同一次运行最多 3 次。每次重试先等待加载结果，不连续点击；若错误提示始终未变化，至少间隔 5 秒才再尝试。第 3 次后再次失败，返回 `failed` / `HUMAN_VERIFICATION_RETRY_EXHAUSTED`，不提交表单。错误提示消失本身不算成功，必须等提交按钮可点击且没有验证加载/错误提示。
 
 等待总预算由 `timeouts.humanMs` 控制，默认累计 180000 毫秒，最多可配置为 300000 毫秒；填写结束和提交前共用预算及重试计数，不会各自重试 3 次。持续加载或按钮始终不可点击时，达到预算即失败，即使尚未用完 3 次重试。日志每 10 秒报告等待原因，每次重试记录 `PAGE_RETRY_1_OF_3` 等计数。交互式真人验证由用户在浏览器中完成，脚本不会操作挑战内容。`npm start` 填写并等待按钮就绪后结束自动操作，仍不点击提交；只有提交模式会在就绪后提交一次。失败后按原 `keepOpen` 配置保留窗口。
 
@@ -313,6 +313,6 @@ const result = await runDocumentWorkflow(config, {
 });
 ```
 
-网络来源在上面的调用中用 `url: 'https://school.example.edu/proof?id=123'` 替换 `file`。统一分流库入口为 `runWorkflow(config, { submit, statusOnly, file, url, signal })`；这里的 `url` 是材料地址，验证地址仍由 `config.url` 提供。直接调用 `runDocumentWorkflow` 则始终只使用材料接口，遇到资料填写步骤返回 `personal_info_required`。浏览器分支调用 `runAutomation`，只有需要表单时才由 CLI 延迟加载 Camoufox；原随机输入、保持窗口和指纹配置仅作用于浏览器分支。更多浏览器设置见 [docs/browser-workflow.md](docs/browser-workflow.md)，历史命令说明以本 README 为准。
+网络来源在上面的调用中用 `url: 'https://school.example.edu/proof?id=123'` 替换 `file`。统一分流库入口为 `runWorkflow(config, { submit, statusOnly, file, url, signal })`；这里的 `url` 是材料地址，验证地址仍由 `config.url` 提供。直接调用 `runDocumentWorkflow` 则始终只使用材料接口，遇到资料填写步骤返回 `personal_info_required`。浏览器分支调用 `runAutomation`，只有需要表单时才由 CLI 延迟加载 ego 浏览器；原随机输入、保持窗口和指纹配置仅作用于浏览器分支。更多浏览器设置见 [docs/browser-workflow.md](docs/browser-workflow.md)，历史命令说明以本 README 为准。
 
-运行 `npm test` 可执行离线回归测试，覆盖浏览器到材料流程的衔接、任务锁、上传响应丢失、下载姓名参数及本机材料下载。有已安装的 Camoufox 时还会运行学校搜索的本地测试页；没有时跳过这些浏览器用例。测试不访问真实验证接口。
+运行 `npm test` 可执行离线回归测试，覆盖浏览器到材料流程的衔接、任务锁、上传响应丢失、下载姓名参数及本机材料下载。依赖 Playwright 进程内夹具的少数浏览器用例保持跳过。测试不访问真实验证接口。

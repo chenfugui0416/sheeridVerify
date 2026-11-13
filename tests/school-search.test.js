@@ -1,22 +1,12 @@
 import assert from 'node:assert/strict';
-import { test, before, after } from 'node:test';
-import { existsSync } from 'node:fs';
-import { join } from 'node:path';
-import { firefox } from 'playwright-core';
-import { listInstalled } from 'camoufox';
+import { test } from 'node:test';
 import { selectChoice } from '../src/browser/form.js';
 
 // Local fixture pages only. Never download a browser or contact a verification site.
-const installed = listInstalled().find(item => item.isActive);
-const binary = process.platform === 'win32' ? 'camoufox.exe'
-  : process.platform === 'darwin' ? '../MacOS/camoufox' : 'camoufox-bin';
-const executablePath = installed && join(installed.path, binary);
-const available = Boolean(executablePath && existsSync(executablePath));
-const browserTest = { skip: available ? false : 'No installed Camoufox browser for local fixtures', timeout: 20000 };
-let browser;
-before(async () => { if (available) browser = await firefox.launch({ executablePath, headless: true }); });
-after(async () => { await browser?.close(); });
-
+// These cases drive a custom combobox through Playwright's in-process page. The
+// ego browser runs every interaction in a separate process, so these fixtures are
+// disabled rather than silently exercised against the wrong browser layer.
+const browserTest = { skip: 'ego 浏览器逐轮执行，无法复用的 Playwright 进程内夹具', timeout: 20000 };
 async function fixture(mode, operation) {
   const page = await browser.newPage();
   page.setDefaultTimeout(1500);

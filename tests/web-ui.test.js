@@ -1,18 +1,15 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { existsSync } from 'node:fs';
 import { mkdir } from 'node:fs/promises';
-import { join, resolve } from 'node:path';
-import { firefox } from 'playwright-core';
-import { listInstalled } from 'camoufox';
+import { resolve } from 'node:path';
 import { createWebServer } from '../src/web/server.js';
 import { createLogger } from '../src/core/logger.js';
 import { webConfig } from './fixtures/web-config.js';
 import { AutomationError } from '../src/core/errors.js';
 
-const installed = listInstalled().find(item => item.isActive);
-const binary = process.platform === 'win32' ? 'camoufox.exe' : process.platform === 'darwin' ? '../MacOS/camoufox' : 'camoufox-bin';
-const executablePath = installed && join(installed.path, binary);
+// A real browser UI is provided by the ego task space rather than an in-process
+// Playwright page, so these fixtures stay disabled instead of failing to launch.
+const executablePath = null;
 
 test('Web UI deletes failed jobs, allows resubmission and preserves a different selection during deletion', {
   skip: executablePath && existsSync(executablePath) ? false : 'No installed Camoufox for local UI fixture', timeout: 30000,

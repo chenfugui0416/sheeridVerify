@@ -96,8 +96,7 @@ async function executeLockedAutomation(config, { submit = false, signal, afterSu
     checkAbort();
     log('browser_identity_created', { stage, code: 'FRESH_CONTEXT' });
     stage = 'navigate';
-    const response = await session.page.goto(config.url, { waitUntil: 'domcontentloaded' });
-    if (response && !response.ok()) throw new AutomationError('NAVIGATION_FAILED', '目标页面返回错误状态');
+    // createSession navigates to config.url inside the ego task space.
     checkAbort();
     if (manual) {
       stage = 'manual';

@@ -2,9 +2,21 @@
 
 本文件保留原浏览器实现的说明；其中 npm start / npm run submit 的历史用法已不适用，当前命令行为以根目录 README.md 为准。浏览器实现仍可通过库入口 runAutomation 调用。
 
-# Camoufox 应用自动化
+# ego 浏览器应用自动化
 
-Node.js ESM 项目，复用现有 `camoufox` / `playwright-core`，不引入运行依赖。首个适配器负责 SheerID 学生信息表单，浏览器层与业务适配器分离。
+Node.js ESM 项目，浏览器层由 `ego-browser` 驱动，不再依赖 `camoufox` / `playwright-core`。首个适配器负责 SheerID 学生信息表单，浏览器层与业务适配器分离。
+
+## 驱动模型
+
+ego 的每条脚本都在独立的 Node 进程中运行，浏览器本身留在持久的 task space 里。因此浏览器层按“轮次”工作，而不是持有一个 Page 对象：
+
+- `src/browser/ego-session.js` 负责进程边界：用 `ego-browser nodejs -e <script>` 传脚本，页面结果写入临时 JSON 文件后读回。ego 不继承父进程环境变量、不读 stdin、把 `console` 输出写到 stderr，这三条约束决定了传参方式。
+- `src/browser/ego-dom.js` 是注入页面的 DOM 语义层：可见性（真实绘制 + 命中测试）、可编辑性、忙状态、下拉选项、ARIA 隐式角色。
+- `src/browser/ego-ops.js` 是页面侧操作表，每轮按选择器重新解析目标，因为 DOM 句柄无法跨 `evaluate()` 调用存活。
+- `src/browser/ego-locator.js` 提供与项目原有调用点一致的 locator 接口，业务适配层无需改写。
+- `src/browser/form.js` / `interaction.js` 用同一套轮次原语重写，保留原有的等待、防抖与拟人化输入策略。
+
+`page.evaluate()` 在隔离世界中执行，写入 `window` 的值不会保留到下一次调用；所有页面侧表达式因此都是自包含的，参数通过 `evaluate` 的 data 参数传入。
 
 ## 使用
 
@@ -12,10 +24,10 @@ Node.js ESM 项目，复用现有 `camoufox` / `playwright-core`，不引入运�
 
 ```powershell
 npm ci
-npm run browser:install
+npm run browser:check
 ```
 
-现有 Windows 浏览器安装补丁保留在 `scripts/install-browser.js` 中，仅适用 Camoufox 0.5.9；升级该依赖时需同步检查补丁。
+`browser:check` 会调用 `ego-browser skill` 确认 ego 浏览器可用；ego 的安装与升级由它自身的 CLI 管理。
 
 本工作区已生成 `config/sheerid.local.json` 并写入提供的验证链接；该文件被 Git 忽略。新工作区可复制示例：
 
@@ -44,7 +56,7 @@ npm start
 
 ### 启动前查询验证状态
 
-`npm start` 和 `npm run submit` 都先从有效配置 URL 提取 `verificationId`，通过 Node.js 内置 `fetch` 请求 `GET https://my.sheerid.com/rest/v2/verification/{verificationId}`。验证 ID 不写死在代码中，也不需要另配接口 URL。只有接口返回 `currentStep: collectStudentPersonalInfo` 且 `errorIds` 为空，才校验表单资料并启动 Camoufox。
+`npm start` 和 `npm run submit` 都先从有效配置 URL 提取 `verificationId`，通过 Node.js 内置 `fetch` 请求 `GET https://my.sheerid.com/rest/v2/verification/{verificationId}`。验证 ID 不写死在代码中，也不需要另配接口 URL。只有接口返回 `currentStep: collectStudentPersonalInfo` 且 `errorIds` 为空，才校验表单资料并启动 ego 浏览器。
 
 | 接口步骤/结果 | 行为 |
 | --- | --- |
@@ -63,9 +75,9 @@ npm start
 
 ### 每次启动的会话与指纹
 
-每次运行都新建 Camoufox 浏览器进程，再用 Camoufox `NewContext()` 生成并安装新的上下文指纹。启动时显式禁用持久化上下文和固定预设，不传入已保存指纹、用户资料目录或 `storageState`，因此不会恢复上次的 Cookie、本地存储或登录状态。日志中的 `browser_identity_created` / `FRESH_CONTEXT` 表示该创建流程已完成，并非检测网站的指纹唯一性证明。
+每次运行都在 ego 的 task space 中打开页面。task space 名称由验证链接和是否无头共同派生，同一验证链接的后续轮次复用同一个浏览器；不同验证链接互不干扰。
 
-Camoufox 0.5.9 在未传入固定指纹/预设时默认重新随机生成，`NewContext()` 也会重新生成上下文指纹。随机生成并不保证每个字段变化或绝对无重复；浏览器版本、配置语言、操作系统及部分硬件相关值可能保持相同。本改动未启用代理，出口 IP 不会因此自动改变。浏览器窗口保持打开时，刷新或继续操作仍属于当前上下文；关闭后重新启动才创建新的上下文。
+ego 使用本机真实的 Chromium 实例，因此浏览器版本、语言与部分硬件相关值由该实例决定。代理通过 `core/network.js` 的本地桥接传递，出口 IP 仅在配置代理时改变。
 
 浏览器会话与 SheerID 验证会话不同：配置 URL 中相同的 `verificationId` 仍对应服务器上的同一笔验证，换浏览器指纹不会创建新的验证记录。此次调整依据已安装依赖源码完成，未启动多轮浏览器或运行指纹差异测试。
 
@@ -141,7 +153,7 @@ src/
   cli.js                  命令行参数、信号、退出码
   index.js                库入口
   core/                   配置校验、错误、日志、结果存储、执行器
-  browser/                Camoufox 生命周期、通用表单操作
+  browser/                ego 轮次驱动、定位器与通用表单操作
   apps/
     registry.js           应用注册表
     sheerid/              SheerID 校验、字段和提交结果解释

@@ -13,7 +13,7 @@
 | `deploy/one-web.service` | systemd 用户服务，默认安装路径 `/data/workspace/one` |
 | `deploy/nginx.conf.example` | 自管 Linux 服务器的 HTTPS 反向代理示例 |
 
-需要 Node.js >= 22.15、npm、适用于当前系统的 Camoufox，以及浏览器所需的系统库。有界面模式还需要可用的桌面会话。systemd 配置用于支持用户服务的 Linux 环境；Windows 本地运行不使用它。
+需要 Node.js >= 22.15、npm、可用的 ego-browser，以及浏览器所需的系统库。有界面模式还需要可用的桌面会话。systemd 配置用于支持用户服务的 Linux 环境；Windows 本地运行不使用它。
 
 下面假定 Linux 程序位于 `/data/workspace/one`。如果安装到其他目录，需要同时修改服务的 `WorkingDirectory`、`EnvironmentFile` 和 `ExecStart`。配置文件相对于工作目录解析。
 
@@ -25,7 +25,7 @@
 
 ```bash
 npm ci
-npm run browser:install
+npm run browser:check
 ```
 
 Windows PowerShell 复制配置：
@@ -66,7 +66,7 @@ npm run web
 ```bash
 cd /data/workspace/one
 npm ci
-npm run browser:install
+npm run browser:check
 cp -n config/sheerid.example.json config/sheerid.local.json
 chmod 600 config/sheerid.local.json
 cp -n deploy/.env.web.example .env.web
@@ -131,7 +131,7 @@ Nginx 通过 `Host` 转发域名，应用会验证 Host、Origin 和写请求令
 
 1. 备份现有代码以及私有配置，将备份保存在受限目录中。
 2. 更新代码，保留 `config/sheerid.local.json`、`.env.web`、材料和运行记录；不要用示例配置覆盖它们。
-3. 依赖变化时运行 `npm ci`；浏览器依赖变化时重新执行 `npm run browser:install`。
+3. 依赖变化时运行 `npm ci`；浏览器依赖变化时重新执行 `npm run browser:check`。
 4. 若修改了服务文件，重新安装文件并执行 `systemctl --user daemon-reload`。
 5. 重启并查看状态、日志，随后验证公网登录和队列接口。
 

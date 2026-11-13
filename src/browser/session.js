@@ -1,55 +1,105 @@
-import { Camoufox, NewContext, DefaultAddons } from 'camoufox';
-import { browserProxy } from '../core/network.js';
+import { createHash } from 'node:crypto';
+import { AutomationError } from '../core/errors.js';
+import { runRound, runScript } from './ego-session.js';
+import { sourceOf } from './ego-source.js';
+import { pageDispatch } from './ego-ops.js';
+import { locatorFor } from './ego-locator.js';
 
-// Keep the owned browser session alive without polling or an arbitrary time limit.
-export function waitForSessionClose({ browser, context, page }, signal) {
-  return new Promise(resolve => {
-    const finish = () => {
-      browser.removeListener('disconnected', finish);
-      context.removeListener('close', finish);
-      page.removeListener('close', finish);
-      signal?.removeEventListener('abort', finish);
-      resolve();
-    };
-    browser.once('disconnected', finish);
-    context.once('close', finish);
-    page.once('close', finish);
-    signal?.addEventListener('abort', finish, { once: true });
-    // Check after subscribing so a close/abort between setup steps cannot be missed.
-    if (signal?.aborted || !browser.isConnected() || page.isClosed()) finish();
-  });
+const DISPATCH = sourceOf(pageDispatch);
+
+// ego keeps the browser in a persistent task space, so a page is addressed by
+// name and every interaction is one round trip. The space name is derived from
+// the verification link, letting a restarted process resume the same browser.
+export function spaceFor(config) {
+  const digest = createHash('sha1')
+    .update(String(config.url) + '|' + Boolean(config.browser.headless))
+    .digest('hex')
+    .slice(0, 12);
+  return 'sheerid-verify-' + digest;
+}
+
+function createPage({ space, label, timeoutMs }) {
+  let closed = false;
+  const page = {
+    space,
+    label,
+    round(call, options = {}) {
+      if (closed) throw new AutomationError('PAGE_CLOSED', '浏览器页面已关闭');
+      return runRound({
+        space, label, body: DISPATCH, call,
+        timeoutMs: Math.max(1000, Math.min(options.timeoutMs ?? timeoutMs, 60000)),
+      });
+    },
+    isClosed: () => closed,
+    close: () => { closed = true; },
+    async url() {
+      const value = await page.round({ op: 'url' });
+      return String(value ?? '');
+    },
+    async evaluate(fn, arg) {
+      return page.round({ op: 'evaluate', source: String(fn), arg: arg === undefined ? null : arg });
+    },
+    async waitForLoadState(_state, options = {}) {
+      const deadline = Date.now() + Math.min(options.timeout ?? 15000, 15000);
+      do {
+        const ready = await page.round({ op: 'ready' });
+        if (ready === 'complete') return;
+        await new Promise(resolve => setTimeout(resolve, 200));
+      } while (Date.now() < deadline);
+      const error = new AutomationError('LOAD_TIMEOUT', '等待页面 load 事件超时');
+      error.name = 'TimeoutError';
+      throw error;
+    },
+    locator(selector) {
+      return locatorFor(page, { selfSelector: selector });
+    },
+    getByRole(role, options = {}, parent) {
+      const base = parent ? { ...parent, parentSelector: parent.selfSelector } : {};
+      return locatorFor(page, {
+        ...base,
+        selfSelector: 'loc=role:' + role,
+        namePattern: options.name instanceof RegExp ? options.name.source : (options.name || null),
+      });
+    },
+    getByText(text, options = {}, parent) {
+      const base = parent ? { ...parent, parentSelector: parent.selfSelector } : {};
+      return locatorFor(page, {
+        ...base,
+        selfSelector: 'text=' + (text instanceof RegExp ? String(text.source) : String(text)),
+        exact: Boolean(options.exact),
+      });
+    },
+    on() {},
+    removeListener() {},
+  };
+  return page;
 }
 
 export async function createSession(config) {
-  // Generate a fresh launch identity on every call. Never supply a saved fingerprint,
-  // preset object, persistent profile directory, or restored storage state here.
-  const browser = await Camoufox({
-    headless: config.browser.headless,
-    locale: config.browser.locale,
-    persistent_context: false,
-    fingerprint_preset: false,
-    humanize: 1.5,
-    // Let the page load its verification resources without the bundled ad blocker.
-    exclude_addons: [DefaultAddons.UBO],
-    proxy: browserProxy(),
-    geoip: true,
-  });
+  const space = spaceFor(config);
+  const label = 'p1';
   try {
-    // Unlike plain browser.newContext(), Camoufox's helper also draws and installs
-    // a fresh context identity. Omitting preset lets the library use new randomness.
-    const context = await NewContext(browser, {
-      locale: config.browser.locale,
-      // NewContext generates a fixed viewport by default. In a visible window,
-      // use its actual content area so maximizing/resizing does not leave a blank strip.
-      // Playwright JS uses null here (Python: no_viewport=True), never a boolean.
-      ...(config.browser.headless ? {} : { viewport: null, deviceScaleFactor: undefined }),
-    });
-    context.setDefaultTimeout(config.timeouts.actionMs);
-    context.setDefaultNavigationTimeout(config.timeouts.navigationMs);
-    const page = await context.newPage();
-    return { browser, context, page, close: () => browser.close() };
+    await runScript([
+      'const task = await taskSpace(' + JSON.stringify(space) + ');',
+      'const page = task.page(' + JSON.stringify(label) + ') || await task.newPage();',
+      'await page.goto(' + JSON.stringify(String(config.url)) + ', { timeout: ' + config.timeouts.navigationMs + ' });',
+    ].join('\n'), { timeoutMs: config.timeouts.navigationMs + 30000 });
   } catch (error) {
-    await browser.close().catch(() => {});
-    throw error;
+    throw error instanceof AutomationError ? error
+      : new AutomationError('NAVIGATION_FAILED', '无法在 ego 浏览器中打开验证页面');
   }
+  const page = createPage({ space, label, timeoutMs: config.timeouts.actionMs });
+  const browser = { isConnected: () => !page.isClosed() };
+  return { page, browser, isConnected: () => !page.isClosed(), close: async () => { page.close(); } };
+}
+
+export function waitForSessionClose({ page }, signal) {
+  return new Promise(resolve => {
+    const finish = () => {
+      signal?.removeEventListener('abort', finish);
+      resolve();
+    };
+    signal?.addEventListener('abort', finish, { once: true });
+    if (signal?.aborted || page.isClosed()) finish();
+  });
 }
