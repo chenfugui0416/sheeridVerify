@@ -1,6 +1,6 @@
 import { AutomationError, requireValue } from '../../core/errors.js';
 import { checkKeys } from '../../core/config.js';
-import { visibleField, setField, waitForFields, selectChoice } from '../../browser/form.js';
+import { visibleField, setField, waitForFields, selectChoice, checkField } from '../../browser/form.js';
 import { selectors as defaults } from './selectors.js';
 import { checkVerificationStatus, stepStatuses } from './status.js';
 import { formLocales, countryChoice, monthChoice } from './labels.js';
@@ -83,11 +83,11 @@ export const sheerid = {
       return visibleField(page, selectors[name], name, config.timeouts.actionMs);
     };
     const set = async (name, value) => {
-      await setField(await field(name), value, { timeoutMs: config.timeouts.readyMs, signal, interaction });
+      await setField(page, await field(name), value, { timeoutMs: config.timeouts.readyMs, signal, interaction });
       log('field_filled', { stage: 'fill', field: name });
     };
     const choose = async (name, options) => {
-      await selectChoice(await field(name), {
+      await selectChoice(page, await field(name), {
         ...options, timeoutMs: config.timeouts.readyMs, signal, field: name, interaction,
         assertReady: () => assertFormAvailable(page, config),
         onPending: code => log('waiting_for_options', { stage: 'fill', field: name, code }),
@@ -113,9 +113,9 @@ export const sheerid = {
     await set('birthYear', year);
     await set('email', data.email);
     if (data.consent === true) {
-      await (await visibleField(page, selectors.consent, 'consent', config.timeouts.readyMs)).check();
+      await checkField(page, await visibleField(page, selectors.consent, 'consent', config.timeouts.readyMs));
     }
-    const button = await visibleField(page, selectors.submit, 'submit', config.timeouts.actionMs);
+    const button = page.locator(await visibleField(page, selectors.submit, 'submit', config.timeouts.actionMs));
     await waitForSubmitReady({ page, button, config, signal, log,
       assertReady: () => assertFormAvailable(page, config) });
   },
@@ -124,7 +124,7 @@ export const sheerid = {
     await assertFormAvailable(page, config);
     await interaction.beforeSubmit();
     const selectors = { ...defaults, ...config.selectors };
-    const button = await visibleField(page, selectors.submit, 'submit', config.timeouts.actionMs);
+    const button = page.locator(await visibleField(page, selectors.submit, 'submit', config.timeouts.actionMs));
     const valid = await button.evaluate(element => !element.form || element.form.checkValidity());
     if (!valid) throw new AutomationError('FORM_INVALID', '表单存在未填写或无效的必填字段');
     await waitForSubmitReady({ page, button, config, signal, log,
@@ -133,44 +133,38 @@ export const sheerid = {
     const stillValid = await button.evaluate(element => !element.form || element.form.checkValidity());
     if (!stillValid) throw new AutomationError('FORM_INVALID', '等待验证期间表单数据发生变化或失效，请检查页面必填字段');
     const verificationId = new URL(config.url).searchParams.get('verificationId');
-    // Arm the response listener before clicking; only observe this session's submission POST.
-    let receivedResponse;
-    const onResponse = response => {
-      const url = new URL(response.url());
-      if (url.origin === 'https://services.sheerid.com'
-        && url.pathname === `/rest/v2/verification/${verificationId}/step/collectStudentPersonalInfo`
-        && response.request().method() === 'POST') receivedResponse = response;
-    };
-    page.on('response', onResponse);
+    const submitPath = '/rest/v2/verification/' + verificationId + '/step/collectStudentPersonalInfo';
+    // Record the application's own fetch traffic before clicking: ego cannot keep a
+    // response listener alive across the separate processes each round runs in.
+    await page.round({ op: 'recordFetch' });
+    await assertFormAvailable(page, config);
+    await markSubmissionAttempted();
     try {
-      await assertFormAvailable(page, config);
-      await markSubmissionAttempted();
-      try {
-        await button.click();
-      } catch {
-        // An explicit failure page resolves an otherwise uncertain click outcome.
-        return await verificationFailure(page)
-          ?? { status: 'submission_unknown', code: 'CLICK_OUTCOME_UNKNOWN' };
-      }
-      const deadline = Date.now() + config.timeouts.resultMs;
-      while (true) {
-        signal?.throwIfAborted();
-        const failure = await verificationFailure(page);
-        if (failure) return failure;
-        if (receivedResponse || page.isClosed() || Date.now() >= deadline) break;
-        await delay(Math.min(200, Math.max(1, deadline - Date.now())), undefined, { signal });
-      }
-    } finally {
-      page.removeListener('response', onResponse);
+      await button.click();
+    } catch {
+      // An explicit failure page resolves an otherwise uncertain click outcome.
+      return await verificationFailure(page)
+        ?? { status: 'submission_unknown', code: 'CLICK_OUTCOME_UNKNOWN' };
     }
-    const response = receivedResponse;
-    if (!response) return { status: 'submission_unknown', code: 'RESULT_TIMEOUT' };
+    const deadline = Date.now() + config.timeouts.resultMs;
+    let record;
+    while (true) {
+      signal?.throwIfAborted();
+      const failure = await verificationFailure(page);
+      if (failure) return failure;
+      const log = await page.round({ op: 'fetchLog' });
+      record = (log ?? []).find(entry => String(entry.url).includes(submitPath)
+        && String(entry.method).toUpperCase() === 'POST');
+      if (record || page.isClosed() || Date.now() >= deadline) break;
+      await delay(Math.min(200, Math.max(1, deadline - Date.now())), undefined, { signal });
+    }
+    if (!record) return { status: 'submission_unknown', code: 'RESULT_TIMEOUT' };
     let body;
-    try { body = await response.json(); } catch {
+    try { body = JSON.parse(record.body); } catch {
       return { status: 'submission_unknown', code: 'INVALID_RESPONSE' };
     }
-    if (!response.ok()) {
-      return response.status() >= 400 && response.status() < 500
+    if (!record.ok) {
+      return record.status >= 400 && record.status < 500
         ? { status: 'rejected', code: 'HTTP_CLIENT_ERROR' }
         : { status: 'submission_unknown', code: 'HTTP_SERVER_ERROR' };
     }
@@ -183,26 +177,26 @@ export const sheerid = {
   },
 };
 
-function isExpectedSession(page, config) {
-  const current = new URL(page.url());
+async function isExpectedSession(page, config) {
+  const current = new URL(await page.url());
   const expected = new URL(config.url);
   return current.origin === expected.origin
     && current.pathname.replace(/\/$/, '') === expected.pathname.replace(/\/$/, '')
     && current.searchParams.get('verificationId') === expected.searchParams.get('verificationId');
 }
 
-function assertSession(page, config) {
-  if (!isExpectedSession(page, config)) {
+async function assertSession(page, config) {
+  if (!await isExpectedSession(page, config)) {
     throw new AutomationError('UNEXPECTED_PAGE', '页面已离开指定验证会话，已停止表单操作');
   }
 }
 
 async function formPageAvailable(page, config) {
   await assertVerificationAvailable(page);
-  if (!isExpectedSession(page, config)) return false;
+  if (!await isExpectedSession(page, config)) return false;
   return true;
 }
 
 async function assertFormAvailable(page, config) {
-  if (!await formPageAvailable(page, config)) assertSession(page, config);
+  if (!await formPageAvailable(page, config)) await assertSession(page, config);
 }

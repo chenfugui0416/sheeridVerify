@@ -135,7 +135,7 @@ export async function setField(page, selector, value, { timeoutMs = 15000, signa
 // Native selects and custom comboboxes behave differently. A custom control only
 // commits when a real option is clicked, so filling its text alone is not enough.
 export async function selectChoice(page, selector, {
-  value, label, labels = [label], searchText, timeoutMs, signal, field,
+  value = undefined, label, labels = [label], searchText, timeoutMs, signal, field,
   allowLocationSuffix = false, normalizeLabelSeparators = false, retrySearch = false,
   interaction, assertReady, onPending, isSelectionCommitted,
 }) {
@@ -235,4 +235,10 @@ export async function selectChoice(page, selector, {
     sawOptions
       ? '字段 ' + field + ' 未出现唯一、稳定且可点击的匹配选项；请检查页面语言、配置名称及加载状态'
       : '字段 ' + field + ' 等待候选项超时；请检查网络、搜索内容和页面语言，未继续填写后续字段');
+}
+
+// Toggles a checkbox or radio through the page, returning its resulting state.
+export async function checkField(page, selector) {
+  abortable();
+  return page.round({ op: 'check', ...target(selector) });
 }

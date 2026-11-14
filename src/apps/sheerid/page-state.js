@@ -6,7 +6,8 @@ const FAILURE_TITLE = /^(?:We (?:couldn['’]t|could not) continue your verifica
 export async function verificationFailure(page) {
   if (page.isClosed()) return null;
   // Do not classify a login page or an unrelated site using its text alone.
-  if (new URL(page.url()).origin !== 'https://services.sheerid.com') return null;
+  // url() is async in the ego driver; a Promise would never match an origin.
+  if (new URL(await page.url()).origin !== 'https://services.sheerid.com') return null;
   const errorStep = page.locator('#sid-step-error').filter({ visible: true });
   const title = page.getByText(FAILURE_TITLE).filter({ visible: true });
   if (await errorStep.count() === 0 && await title.count() === 0) return null;

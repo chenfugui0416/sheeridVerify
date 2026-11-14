@@ -11,7 +11,6 @@
 //   textPattern    text filter used by getByText
 export function pageDispatch() {
   const dom = window.__sheeridEgoDom__;
-  const escapeRe = text => text.replace(/[.*+?^${}()|[\]\\]/g, '\\  const nameOf = node =>');
   const nameOf = node => dom.norm(node.getAttribute('aria-label')
     || node.getAttribute('name')
     || node.getAttribute('placeholder')
@@ -64,7 +63,7 @@ export function pageDispatch() {
       // The suffix is a regular expression so a caller can pass either a literal
       // phrase or a case-insensitive alternation from the app's own config.
       let test;
-      try { test = new RegExp(pattern, 'i'); } catch { test = new RegExp(escapeRe(pattern), 'i'); }
+      try { test = new RegExp(pattern, 'i'); } catch { test = new RegExp(pattern.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'i'); }
       return dom.all('*').filter(node => test.test(dom.norm(node.innerText || node.textContent)));
     }
     return [];
@@ -104,6 +103,27 @@ export function pageDispatch() {
     }
     return node;
   };
+  // ego's cdp() is request/response only and each round is a fresh process, so a
+  // page-level response listener cannot span the click. Patching window.fetch
+  // inside the page records what the application itself sent and received.
+  const FETCH_LOG = '__sheeridFetchLog__';
+  const recordFetch = () => {
+    if (window[FETCH_LOG]) return window[FETCH_LOG].length;
+    const log = [];
+    window[FETCH_LOG] = log;
+    const original = window.fetch;
+    window.fetch = async function (...args) {
+      const request = args[0];
+      const url = typeof request === 'string' ? request : (request && request.url) || '';
+      const method = (args[1] && args[1].method) || (request && request.method) || 'GET';
+      const response = await original.apply(this, args);
+      let body = null;
+      try { body = await response.clone().text(); } catch { body = null; }
+      log.push({ url: String(url), method: String(method).toUpperCase(), status: response.status, ok: response.ok, body });
+      return response;
+    };
+    return 0;
+  };
   const ops = {
     // Page-level reads. `ready` reports whether the load event already fired so
     // waitForLoadState can poll instead of blocking a whole round on a slow page.
@@ -115,6 +135,8 @@ export function pageDispatch() {
       const fn = new Function('return (' + input.source + ')')();
       return fn(input.arg === undefined ? null : input.arg);
     },
+    recordFetch: () => recordFetch(),
+    fetchLog: () => (window[FETCH_LOG] || []).slice(),
     count: input => targets(input).length,
     texts: input => targets(input).map(node => dom.norm(node.innerText || node.textContent)),
     first: input => { const node = single(input); return node ? dom.norm(node.innerText || node.textContent) : null; },
